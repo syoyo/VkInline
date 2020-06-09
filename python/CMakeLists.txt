@@ -40,6 +40,7 @@ add_definitions(${DEFINES})
 
 add_library(PyVkInline SHARED ${SRC})
 target_link_libraries(PyVkInline VkInline)
+add_sanitizers(PyVkInline)
 
 
 if (WIN32) 

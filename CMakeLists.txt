@@ -8,6 +8,10 @@ set (SPIRV_CROSS_STATIC true)
 
 project(VkInline)
 
+# cmake modules
+list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/sanitizers)
+find_package(Sanitizers) # Address sanitizer (-DSANITIZE_ADDRESS=ON)
+
 set (INCLUDE_DIR
 thirdparty
 thirdparty/volk
@@ -68,6 +72,7 @@ internal/impl_context.inl
 add_definitions(${DEFINES})
 add_library(unqlite STATIC thirdparty/unqlite/unqlite.h thirdparty/unqlite/unqlite.c)
 add_library(VkInline ${LIB_SOURCES} ${LIB_HEADERS} ${INTERNAL_HEADERS})
+add_sanitizers(VkInline)
 target_link_libraries(VkInline volk glslang SPIRV spirv-cross-glsl unqlite)
 
 
