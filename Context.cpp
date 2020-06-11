@@ -2,6 +2,7 @@
 #include "internal_context.h"
 #include <unordered_map>
 #include <unordered_set>
+#include <mutex>
 #include <shared_mutex>
 
 namespace VkInline
@@ -15,7 +16,7 @@ namespace VkInline
 		// reflection 
 		size_t size_of(const char* cls);
 		bool query_struct(const char* name_struct, size_t* member_offsets);
-		bool launch_compute(dim_type gridDim, dim_type blockDim, const std::vector<CapturedShaderViewable>& arg_map, const char* code_body);
+		bool launch_compute(dim_type gridDim, dim_type blockDim, const std::vector<CapturedShaderViewable>& arg_map, const std::vector<Texture2D*>& tex2ds,  const char* code_body);
 
 
 		void add_built_in_header(const char* name, const char* content);
@@ -28,7 +29,7 @@ namespace VkInline
 		Context();
 		~Context();
 
-		unsigned _build_compute_pipeline(dim_type blockDim, const std::vector<CapturedShaderViewable>& arg_map, const char* code_body);
+		unsigned _build_compute_pipeline(dim_type blockDim, const std::vector<CapturedShaderViewable>& arg_map, size_t num_tex2d, const char* code_body);
 
 		bool m_verbose;
 		std::unordered_map<std::string, const char*> m_header_map;
@@ -40,10 +41,10 @@ namespace VkInline
 		std::shared_mutex m_mutex_dynamic_code;
 
 		std::unordered_map<std::string, size_t> m_size_of_types;
-		std::shared_mutex m_mutex_sizes;
+		std::mutex m_mutex_sizes;
 
 		std::unordered_map<std::string, std::vector<size_t>> m_offsets_of_structs;
-		std::shared_mutex m_mutex_offsets;
+		std::mutex m_mutex_offsets;
 
 		std::vector <Internal::ComputePipeline*> m_cache_compute_pipelines;
 		std::unordered_map<int64_t, unsigned> m_map_compute_pipelines;
@@ -59,7 +60,9 @@ namespace VkInline
 	bool TryInit()
 	{
 		auto context = Internal::Context::get_context(false, true);
-		return context != nullptr;
+		if (context == nullptr) return false;
+		Context& ctx = Context::get_context();
+		return true;
 	}
 
 	void SetVerbose(bool verbose)
@@ -165,6 +168,37 @@ namespace VkInline
 		m_tex->download(hdata);
 	}
 
+	void Texture2D::apply_barrier_as_texture(const Internal::CommandBuffer& cmdbuf, unsigned dstFlags) const
+	{
+		VkImageMemoryBarrier barriers[1];
+		barriers[0] = {};
+		barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		barriers[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barriers[0].image = m_tex->image();
+		barriers[0].subresourceRange.aspectMask = m_tex->aspect();
+		barriers[0].subresourceRange.baseMipLevel = 0;
+		barriers[0].subresourceRange.levelCount = 1;
+		barriers[0].subresourceRange.baseArrayLayer = 0;
+		barriers[0].subresourceRange.layerCount = 1;
+		barriers[0].srcAccessMask = 0;
+		barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	
+
+		vkCmdPipelineBarrier(
+			cmdbuf.buf(),
+			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+			dstFlags,
+			0,
+			0, nullptr,
+			0, nullptr,
+			1, barriers
+		);
+
+	}
+
 	Computer::Computer(const std::vector<const char*>& param_names, const char* code_body) :
 		m_param_names(param_names.size()), m_code_body(code_body)
 	{
@@ -172,7 +206,7 @@ namespace VkInline
 			m_param_names[i] = param_names[i];
 	}
 
-	bool Computer::launch(dim_type gridDim, dim_type blockDim, const ShaderViewable** args)
+	bool Computer::launch(dim_type gridDim, dim_type blockDim, const ShaderViewable** args, const std::vector<Texture2D*>& tex2ds)
 	{
 		Context& ctx = Context::get_context();
 		std::vector<CapturedShaderViewable> arg_map(m_param_names.size());
@@ -181,7 +215,7 @@ namespace VkInline
 			arg_map[i].obj_name = m_param_names[i].c_str();
 			arg_map[i].obj = args[i];
 		}
-		return ctx.launch_compute(gridDim, blockDim, arg_map, m_code_body.c_str());
+		return ctx.launch_compute(gridDim, blockDim, arg_map, tex2ds, m_code_body.c_str());
 	}
 
 

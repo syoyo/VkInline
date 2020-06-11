@@ -51,6 +51,8 @@ namespace VkInline
 		void upload(const void* hdata);
 		void download(void* hdata) const;
 
+		void apply_barrier_as_texture(const Internal::CommandBuffer& cmdbuf, unsigned dstFlags) const;
+
 	private:
 		Internal::Texture2D* m_tex;
 	};
@@ -60,7 +62,7 @@ namespace VkInline
 	public:
 		size_t num_params() const { return m_param_names.size(); }
 		Computer(const std::vector<const char*>& param_names, const char* code_body);
-		bool launch(dim_type gridDim, dim_type blockDim, const ShaderViewable** args);
+		bool launch(dim_type gridDim, dim_type blockDim, const ShaderViewable** args, const std::vector<Texture2D*>& tex2ds);
 
 	private:
 		std::vector<std::string> m_param_names;

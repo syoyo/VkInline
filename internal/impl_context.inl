@@ -24,6 +24,9 @@ namespace VkInline
 
 	Context::~Context()
 	{
+		auto context = Internal::Context::get_context();
+		context->Wait();
+
 		for (size_t i = 0; i < m_cache_compute_pipelines.size(); i++)
 			delete m_cache_compute_pipelines[i];
 		Internal::Context::get_context(true);
@@ -67,14 +70,12 @@ namespace VkInline
 	size_t Context::size_of(const char* cls)
 	{
 		// try to find in the context cache first
+		std::unique_lock<std::mutex> lock(m_mutex_sizes);
+		decltype(m_size_of_types)::iterator it = m_size_of_types.find(cls);
+		if (it != m_size_of_types.end())
 		{
-			std::shared_lock<std::shared_mutex> lock(m_mutex_sizes);
-			decltype(m_size_of_types)::iterator it = m_size_of_types.find(cls);
-			if (it != m_size_of_types.end())
-			{
-				size_t size= it->second;
-				return size;
-			}
+			size_t size= it->second;
+			return size;
 		}
 
 		// reflect from device code
@@ -160,18 +161,15 @@ namespace VkInline
 		}
 
 		// cache the result
-		{
-			std::unique_lock<std::shared_mutex> lock(m_mutex_sizes);
-			m_size_of_types[cls] = size;
-		}
+		m_size_of_types[cls] = size;
 		return size;
 	}
 
 	bool Context::query_struct(const char* name_struct, size_t* member_offsets)
 	{
 		// try to find in the context cache first
+		std::unique_lock<std::mutex> lock(m_mutex_offsets);
 		{
-			std::shared_lock<std::shared_mutex> lock(m_mutex_offsets);
 			decltype(m_offsets_of_structs)::iterator it = m_offsets_of_structs.find(name_struct);
 			if (it != m_offsets_of_structs.end())
 			{
@@ -271,11 +269,8 @@ namespace VkInline
 		}
 
 		// cache the result
-		{
-			std::unique_lock<std::shared_mutex> lock(m_mutex_offsets);
-			m_offsets_of_structs[name_struct].resize(num_members + 1);
-			memcpy(m_offsets_of_structs[name_struct].data(), member_offsets, sizeof(size_t)*(num_members + 1));
-		}		
+		m_offsets_of_structs[name_struct].resize(num_members + 1);
+		memcpy(m_offsets_of_structs[name_struct].data(), member_offsets, sizeof(size_t)*(num_members + 1));
 		return true;
 	}
 
@@ -316,33 +311,54 @@ namespace VkInline
 		char str_hash[32];
 		sprintf(str_hash, "%016llx", hash);
 
-		{
-			std::shared_lock<std::shared_mutex> lock(m_mutex_dynamic_code);
-			auto it = m_known_code.find(hash);
-			if (it != m_known_code.end())
-				return str_hash;
-		}
+		std::unique_lock<std::shared_mutex> lock(m_mutex_dynamic_code);
+
+		auto it = m_known_code.find(hash);
+		if (it != m_known_code.end())
+			return str_hash;
 
 		std::string str_code = code;
 		replace_str(str_code, "#hash#", str_hash);
 
-		{
-			std::unique_lock<std::shared_mutex> lock(m_mutex_dynamic_code);
-			m_header_of_dynamic_code += str_code.data();
-			m_header_map[m_name_header_of_dynamic_code] = m_header_of_dynamic_code.c_str();
-			m_known_code.insert(hash);
-		}
+		m_header_of_dynamic_code += str_code.data();
+		m_header_map[m_name_header_of_dynamic_code] = m_header_of_dynamic_code.c_str();
+		m_known_code.insert(hash);
 
 		return str_hash;
 	}
 
-	unsigned Context::_build_compute_pipeline(dim_type blockDim, const std::vector<CapturedShaderViewable>& arg_map, const char* code_body)
+/*	class Signature
+	{
+	public:
+		Signature() {}
+		~Signature() {}
+
+		void push_feature(void* feature, size_t size)
+		{
+			size_t offset = m_data.size();
+			m_data.resize(offset + size);
+			memcpy(m_data.data() + offset, feature, size);
+		}
+
+		unsigned long long get_hash()
+		{
+			return (unsigned long long)crc64(0, m_data.data(), m_data.size());
+		}
+
+	private:
+		std::vector<unsigned char> m_data;
+
+	};
+*/
+
+	unsigned Context::_build_compute_pipeline(dim_type blockDim, const std::vector<CapturedShaderViewable>& arg_map, size_t num_tex2d, const char* code_body)
 	{
 		std::string saxpy =
 			"#version 460\n"
 			"#extension GL_GOOGLE_include_directive : enable\n"
 			"#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"
 			"#extension GL_EXT_buffer_reference2 : enable\n"
+			"#extension GL_EXT_nonuniform_qualifier : enable\n"
 			"#extension GL_EXT_scalar_block_layout : enable\n";
 
 		for (size_t i = 0; i < m_code_blocks.size(); i++)
@@ -361,6 +377,12 @@ namespace VkInline
 		}
 		saxpy += "};\n";
 
+		if (num_tex2d > 0)
+		{
+			sprintf(line, "layout(binding = 1) uniform sampler2D[%d] arr_tex2d;\n", (int)num_tex2d);
+			saxpy += line;
+		}
+
 		sprintf(line, "layout(local_size_x = %d, local_size_y = %d, local_size_z = %d) in;\n", blockDim.x, blockDim.y, blockDim.z);
 		saxpy += line;
 		saxpy += std::string(code_body);
@@ -376,14 +398,14 @@ namespace VkInline
 
 		unsigned long long hash = s_get_hash(saxpy.c_str());
 		unsigned kid = (unsigned)(-1);
+
+		std::unique_lock<std::shared_mutex> lock(m_mutex_compute_pipelines);
+			
+		auto it = m_map_compute_pipelines.find(hash);
+		if (it != m_map_compute_pipelines.end())
 		{
-			std::shared_lock<std::shared_mutex> lock(m_mutex_compute_pipelines);
-			auto it = m_map_compute_pipelines.find(hash);
-			if (it != m_map_compute_pipelines.end())
-			{
-				kid = it->second;
-				return kid;
-			}
+			kid = it->second;
+			return kid;
 		}
 
 		std::vector<unsigned int> spv;
@@ -432,17 +454,15 @@ namespace VkInline
 			}
 		}
 
-		Internal::ComputePipeline* pipeline = new Internal::ComputePipeline(spv);
-		{
-			std::unique_lock<std::shared_mutex> lock(m_mutex_compute_pipelines);
-			m_cache_compute_pipelines.push_back(pipeline);
-			kid = (unsigned)m_cache_compute_pipelines.size() - 1;
-			m_map_compute_pipelines[hash] = kid;
-		}
+		Internal::ComputePipeline* pipeline = new Internal::ComputePipeline(spv, num_tex2d);
+		m_cache_compute_pipelines.push_back(pipeline);
+		kid = (unsigned)m_cache_compute_pipelines.size() - 1;
+		m_map_compute_pipelines[hash] = kid;
+
 		return kid;
 	}
 
-	bool Context::launch_compute(dim_type gridDim, dim_type blockDim, const std::vector<CapturedShaderViewable>& arg_map, const char* code_body)
+	bool Context::launch_compute(dim_type gridDim, dim_type blockDim, const std::vector<CapturedShaderViewable>& arg_map, const std::vector<Texture2D*>& tex2ds, const char* code_body)
 	{
 		// query uniform
 		std::vector<size_t> offsets(arg_map.size() + 1);
@@ -462,7 +482,7 @@ namespace VkInline
 			query_struct(name.c_str(), offsets.data());
 		}
 
-		unsigned kid = _build_compute_pipeline(blockDim, arg_map, code_body);
+		unsigned kid = _build_compute_pipeline(blockDim, arg_map, tex2ds.size(), code_body);
 		if (kid == (unsigned)(-1)) return false;
 		Internal::ComputePipeline* pipeline;
 		{
@@ -489,8 +509,13 @@ namespace VkInline
 			arg_map[i].obj->apply_barriers(*cmdBuf, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 		}
 
-
-		cmdBuf->dispatch(h_uniform.data(), gridDim.x, gridDim.y, gridDim.z);
+		std::vector<Internal::Texture2D*> i_tex2ds(tex2ds.size());
+		for (size_t i = 0; i < i_tex2ds.size(); i++)
+		{
+			tex2ds[i]->apply_barrier_as_texture(*cmdBuf, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+			i_tex2ds[i] = tex2ds[i]->internal();
+		}
+		cmdBuf->dispatch(h_uniform.data(), i_tex2ds.data(), gridDim.x, gridDim.y, gridDim.z);
 
 		const Internal::Context* ctx = Internal::Context::get_context();
 		ctx->SubmitCommandBuffer(cmdBuf);

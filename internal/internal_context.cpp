@@ -52,10 +52,10 @@ namespace VkInline
 				VkApplicationInfo appInfo = {};
 				appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
 				appInfo.pApplicationName = "TextureGen";
-				appInfo.applicationVersion = VK_MAKE_VERSION(1, 2, 0);
+				appInfo.applicationVersion = VK_MAKE_VERSION(1, 1, 0);
 				appInfo.pEngineName = "No Engine";
-				appInfo.engineVersion = VK_MAKE_VERSION(1, 2, 0);
-				appInfo.apiVersion = VK_API_VERSION_1_2;
+				appInfo.engineVersion = VK_MAKE_VERSION(1, 1, 0);
+				appInfo.apiVersion = VK_API_VERSION_1_1;
 
 				const char* name_extensions[] = {
 					VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
@@ -107,18 +107,19 @@ namespace VkInline
 				m_physicalDevice = ph_devices[0];
 			}
 
-			m_bufferDeviceAddressFeatures = {};
-			m_descriptorIndexingFeatures = {};
-			m_scalarBlockLayoutFeatures = {};
+			
 			{
-				m_bufferDeviceAddressFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+				m_bufferDeviceAddressFeatures = {};
+				m_bufferDeviceAddressFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_EXT;
 				m_bufferDeviceAddressFeatures.pNext = &m_descriptorIndexingFeatures;
+				m_descriptorIndexingFeatures = {};
 				m_descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
 				m_descriptorIndexingFeatures.pNext = &m_scalarBlockLayoutFeatures;
+				m_scalarBlockLayoutFeatures = {};
 				m_scalarBlockLayoutFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES_EXT;
+				m_features2 = {};
 				m_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 				m_features2.pNext = &m_bufferDeviceAddressFeatures;
-				m_features2.features = {};
 				vkGetPhysicalDeviceFeatures2(m_physicalDevice, &m_features2);
 			}
 
@@ -144,8 +145,7 @@ namespace VkInline
 				queueCreateInfo.pQueuePriorities = &m_queuePriority;
 
 				const char* name_extensions[] = {
-					VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
-					VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+					VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
 					VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
 					VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME
 				};
@@ -357,7 +357,7 @@ namespace VkInline
 			VkBufferDeviceAddressInfo bufAdrInfo = {};
 			bufAdrInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
 			bufAdrInfo.buffer = m_buf;
-			return vkGetBufferDeviceAddressKHR(ctx->device(), &bufAdrInfo);
+			return vkGetBufferDeviceAddressEXT(ctx->device(), &bufAdrInfo);
 		}
 
 
@@ -397,14 +397,6 @@ namespace VkInline
 			memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 			memoryAllocateInfo.allocationSize = memRequirements.size;
 			memoryAllocateInfo.memoryTypeIndex = memoryTypeIndex;
-
-			VkMemoryAllocateFlagsInfo memoryAllocateFlagsInfo = {};
-			memoryAllocateFlagsInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-
-			if ((usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0)
-				memoryAllocateFlagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-
-			memoryAllocateInfo.pNext = &memoryAllocateFlagsInfo;
 
 			vkAllocateMemory(ctx->device(), &memoryAllocateInfo, nullptr, &m_mem);
 			vkBindBufferMemory(ctx->device(), m_buf, m_mem, 0);
@@ -593,6 +585,24 @@ namespace VkInline
 
 			const Context* ctx = Context::get_context();
 
+			usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+			VkFormatProperties format_props;
+			vkGetPhysicalDeviceFormatProperties(ctx->physicalDevice(), format, &format_props);		
+			if ((format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0
+				|| (format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0)
+				usage &= ~VK_IMAGE_USAGE_SAMPLED_BIT;
+			if ((format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) == 0)
+				usage &= ~VK_IMAGE_USAGE_STORAGE_BIT;
+			if ((format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) == 0)
+				usage &= ~VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+			if ((format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0)
+				usage &= ~VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+			if ((format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) == 0)
+				usage &= ~VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+			if ((format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) == 0)
+				usage &= ~VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
 			VkImageCreateInfo imageInfo = {};
 			imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 			imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -604,7 +614,7 @@ namespace VkInline
 			imageInfo.format = format;
 			imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
 			imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			imageInfo.usage = usage | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+			imageInfo.usage = usage;
 			imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 			imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -777,8 +787,35 @@ namespace VkInline
 			staging_buf.download(hdata);
 		}
 
-		ComputePipeline::ComputePipeline(const std::vector<unsigned>& spv)
+
+		Sampler::Sampler()
 		{
+			const Context* ctx = Context::get_context();
+			VkSamplerCreateInfo samplerInfo = {};
+			samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+			samplerInfo.magFilter = VK_FILTER_LINEAR;
+			samplerInfo.minFilter = VK_FILTER_LINEAR;
+			samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+			samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+			samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+			samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+			samplerInfo.unnormalizedCoordinates = VK_FALSE;
+			samplerInfo.compareEnable = VK_FALSE;
+			samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+			samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+			vkCreateSampler(ctx->device(), &samplerInfo, nullptr, &m_sampler);
+		}
+
+		Sampler::~Sampler()
+		{
+			const Context* ctx = Context::get_context();
+			vkDestroySampler(ctx->device(), m_sampler, nullptr);
+		}
+
+		ComputePipeline::ComputePipeline(const std::vector<unsigned>& spv, size_t num_tex2d)
+		{
+			m_sampler = nullptr;
 			const Context* ctx = Context::get_context();
 			VkShaderModule shader_module;
 			{
@@ -789,17 +826,29 @@ namespace VkInline
 				vkCreateShaderModule(ctx->device(), &createInfo, nullptr, &shader_module);
 			}
 			{
-				VkDescriptorSetLayoutBinding descriptorSetLayoutBindings[1];
+				std::vector<VkDescriptorSetLayoutBinding> descriptorSetLayoutBindings(1);
 				descriptorSetLayoutBindings[0] = {};
 				descriptorSetLayoutBindings[0].binding = 0;
 				descriptorSetLayoutBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 				descriptorSetLayoutBindings[0].descriptorCount = 1;
 				descriptorSetLayoutBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
+				m_num_tex2d = num_tex2d;
+				if (num_tex2d > 0)
+				{
+					VkDescriptorSetLayoutBinding binding_tex2d = {};
+					binding_tex2d.binding = 1;
+					binding_tex2d.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+					binding_tex2d.descriptorCount = (unsigned)num_tex2d;
+					binding_tex2d.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+					descriptorSetLayoutBindings.push_back(binding_tex2d);
+					m_sampler = new Sampler;
+				}
+
 				VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 				layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-				layoutInfo.bindingCount = 1;
-				layoutInfo.pBindings = descriptorSetLayoutBindings;
+				layoutInfo.bindingCount = (unsigned)descriptorSetLayoutBindings.size();
+				layoutInfo.pBindings = descriptorSetLayoutBindings.data();
 
 				vkCreateDescriptorSetLayout(ctx->device(), &layoutInfo, nullptr, &m_descriptorSetLayout);
 			}
@@ -843,7 +892,8 @@ namespace VkInline
 			const Context* ctx = Context::get_context();			
 			vkDestroyPipeline(ctx->device(), m_pipeline, nullptr);
 			vkDestroyPipelineLayout(ctx->device(), m_pipelineLayout, nullptr);
-			vkDestroyDescriptorSetLayout(ctx->device(), m_descriptorSetLayout, nullptr);		
+			vkDestroyDescriptorSetLayout(ctx->device(), m_descriptorSetLayout, nullptr);
+			delete m_sampler;
 		}
 
 		CommandBufferRecycler* ComputePipeline::recycler() const
@@ -888,14 +938,21 @@ namespace VkInline
 			m_pipeline = pipeline;
 			m_ubo = new DeviceBuffer(ubo_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 			{
-				VkDescriptorPoolSize poolSizes[1];
+				std::vector<VkDescriptorPoolSize> poolSizes(1);
 				poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 				poolSizes[0].descriptorCount = 1;
 
+				if (pipeline->num_tex2d() > 0)
+				{
+					VkDescriptorPoolSize pool_size_tex2d = {};
+					pool_size_tex2d.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+					pool_size_tex2d.descriptorCount = (unsigned)pipeline->num_tex2d();
+				}
+
 				VkDescriptorPoolCreateInfo poolInfo = {};
 				poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-				poolInfo.poolSizeCount = 1;
-				poolInfo.pPoolSizes = poolSizes;
+				poolInfo.poolSizeCount = (unsigned)poolSizes.size();
+				poolInfo.pPoolSizes = poolSizes.data();
 				poolInfo.maxSets = 1;
 				vkCreateDescriptorPool(ctx->device(), &poolInfo, nullptr, &m_descriptorPool);
 			}
@@ -937,9 +994,32 @@ namespace VkInline
 			m_pipeline->recycler()->RecycleCommandBuffer(this);
 		}
 
-		void ComputeCommandBuffer::dispatch(void* param_data, unsigned dim_x, unsigned dim_y, unsigned dim_z)
+		void ComputeCommandBuffer::dispatch(void* param_data, Texture2D** tex2ds, unsigned dim_x, unsigned dim_y, unsigned dim_z)
 		{
+			const Context* ctx = Context::get_context();
 			m_ubo->upload(param_data);
+
+			if (m_pipeline->num_tex2d() > 0)
+			{
+				std::vector<VkDescriptorImageInfo> imageInfos(m_pipeline->num_tex2d());
+				for (size_t i = 0; i < m_pipeline->num_tex2d(); ++i)
+				{
+					imageInfos[i] = {};
+					imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+					imageInfos[i].imageView = tex2ds[i]->view();
+					imageInfos[i].sampler = m_pipeline->sampler()->sampler();
+				}
+
+				VkWriteDescriptorSet wds = {};
+				wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				wds.dstSet = m_descriptorSet;
+				wds.dstBinding = 1;
+				wds.descriptorCount = (uint32_t)m_pipeline->num_tex2d();
+				wds.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				wds.pImageInfo = imageInfos.data();
+				vkUpdateDescriptorSets(ctx->device(), 1, &wds, 0, nullptr);
+			}
+
 			VkBufferMemoryBarrier barriers[1];
 			barriers[0] = {};
 			barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
