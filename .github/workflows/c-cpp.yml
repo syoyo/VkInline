@@ -9,13 +9,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: configure
+    - name: build
       run: |
         git submodule update --init --recursive --depth 1
         mkdir build
         cd build
         cmake -DBUILD_PYTHON_BINDINGS=true -DVKINLINE_BUILD_TESTS=true -DVKINLINE_INCLUDE_PYTESTS=true ..
         cmake --build .
-
-    - name: install
-      run: cmake --build . --target install
+        make install
