@@ -1,0 +1,20 @@
+name: C/C++ CI
+
+on: [ push, pull_request ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: configure
+      run: |
+        mkdir build
+        cd build
+        cmake -DBUILD_PYTHON_BINDINGS=true -DVKINLINE_BUILD_TESTS=true -DVKINLINE_INCLUDE_PYTESTS=true
+        cmake --build .
+
+    - name: install
+      run: cmake --build . --target install
